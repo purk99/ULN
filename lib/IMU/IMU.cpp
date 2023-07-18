@@ -1,7 +1,16 @@
 #include <Arduino.h>
+
+#ifdef TARGET_NANO_OTHER
+#include <Arduino_LSM9DS1.h>
+//#include <LSM9DS1.h>
+#else
 #include <Arduino_LSM6DS3.h>
+#endif
 
 #include "IMU.h"
+
+float x, y, z;
+float gx, gy, gz;
 
 bool imuSetup()
 {
@@ -9,7 +18,7 @@ bool imuSetup()
     return false;
   }
 
-  #ifdef PRINT_DEBUG_BUILD
+  #ifdef DEBUG
     Serial.print("Gyroscope sample rate = ");
     Serial.print(IMU.gyroscopeSampleRate());
     Serial.println(" Hz");
