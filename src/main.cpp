@@ -1,8 +1,7 @@
-//#define PRINT_DEBUG_BUILD  //This is to print the mpu data on serial monitor to debug
 //PID library
 #include <PID_v1.h>
-#include <Arduino_LSM9DS1.h>
-//#include <LSM9DS1.h>
+//IMU library
+#include <IMU.h>
 
 //These are needed for MPU
 #include "I2Cdev.h"
@@ -158,6 +157,8 @@ void setupMPU()
 
 void setup()
 {
+  Serial.begin(9600);
+
   //This is to set up motors
   setupMotors();   
   //This is to set up MPU6050 sensor
@@ -165,7 +166,11 @@ void setup()
   //This is to set up PID 
   setupPID();
 
-  Serial.begin(9800);
+  if (!imuSetup()) {
+    Serial.println("Failed to initialize IMU!");
+
+    while (1);
+  }
 }
 
 void loop()
@@ -173,13 +178,8 @@ void loop()
   // if programming failed, don't try to do anything
   //if (!dmpReady) return;
 
-  float x, y, z;
-  float gx, gy, gz;
+  imuLoop();
 
-  // read a packet from FIFO. Get the Latest packet
-  if (IMU.accelerationAvailable()) 
-  {  
-    
     /*
     mpu.dmpGetQuaternion(&q, fifoBuffer);
     mpu.dmpGetGravity(&gravity, &q);
@@ -187,28 +187,23 @@ void loop()
     mpu.dmpGetGyro(&gy, fifoBuffer);
     */
 
-    IMU.readAcceleration(x,y,z);
-    IMU.readGyroscope(gx, gy, gz);
-  
+  yawGyroRate = gz;                   //rotation rate in degrees per second
+  //pitchGyroAngle = ypr[1] * 180/M_PI;   //angle in degree
 
-    yawGyroRate = gz;                   //rotation rate in degrees per second
-    //pitchGyroAngle = ypr[1] * 180/M_PI;   //angle in degree
+  pitchPID.Compute(true);
+  yawPID.Compute(true);
 
-    pitchPID.Compute(true);
-    yawPID.Compute(true);
+  rotateMotor(pitchPIDOutput+yawPIDOutput, pitchPIDOutput-yawPIDOutput);
 
-    rotateMotor(pitchPIDOutput+yawPIDOutput, pitchPIDOutput-yawPIDOutput);
-
-    #ifdef PRINT_DEBUG_BUILD
-      Serial.println("The gyro  before ");
-      Serial.println(pitchGyroAngle);
-      Serial.println("The setpoints ");
-      Serial.println(setpointPitchAngle);
-      Serial.println("The pid output ");
-      Serial.println(pitchPIDOutput);
-      delay(500);    
-    #endif
-  }
+  #ifdef DEBUG
+    Serial.println("The gyro before ");
+    Serial.println(pitchGyroAngle);
+    Serial.println("The setpoints ");
+    Serial.println(setpointPitchAngle);
+    Serial.println("The pid output ");
+    Serial.println(pitchPIDOutput);
+    delay(500);    
+  #endif
 }
 
 void rotateMotor(int speed1, int speed2)
