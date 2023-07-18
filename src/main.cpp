@@ -1,6 +1,6 @@
-#define PRINT_DEBUG_BUILD  //This is to print the mpu data on serial monitor to debug
 //PID library
 #include <PID_v1.h>
+//IMU library
 #include <IMU.h>
 
 //These are needed for MPU
@@ -195,7 +195,7 @@ void loop()
 
   rotateMotor(pitchPIDOutput+yawPIDOutput, pitchPIDOutput-yawPIDOutput);
 
-  #ifdef PRINT_DEBUG_BUILD
+  #ifdef DEBUG
     Serial.println("The gyro before ");
     Serial.println(pitchGyroAngle);
     Serial.println("The setpoints ");
