@@ -1,7 +1,11 @@
 //PID library
 #include <PID_v1.h>
+
 //IMU library
 #include <IMU.h>
+
+// BLE UART remote controller
+#include "BLE_UART_remote.h"
 
 //These are needed for MPU
 #include "I2Cdev.h"
@@ -171,6 +175,12 @@ void setup()
 
     while (1);
   }
+
+  if (!bleUartSetup("ULN Remote Receiver")) {
+    Serial.println("Failed to initialize BLE UART remote!");
+
+    while (1);
+  }
 }
 
 void loop()
@@ -179,6 +189,13 @@ void loop()
   //if (!dmpReady) return;
 
   imuLoop();
+
+  bleUartLoop();
+  if (command != 0x00) {
+    Serial.print("remote command received: ");
+    Serial.println(command);
+    bleUartCommandHandled();
+  }
 
     /*
     mpu.dmpGetQuaternion(&q, fifoBuffer);

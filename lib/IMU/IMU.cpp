@@ -18,7 +18,7 @@ bool imuSetup()
     return false;
   }
 
-  #ifdef DEBUG
+  #ifdef IMU_WITH_SERIAL_FEEDBACK
     Serial.print("Gyroscope sample rate = ");
     Serial.print(IMU.gyroscopeSampleRate());
     Serial.println(" Hz");
@@ -42,7 +42,7 @@ void imuLoop()
     IMU.readGyroscope(gx, gy, gz);
   }
 
-  #ifdef PRINT_DEBUG_BUILD
+  #ifdef IMU_WITH_SERIAL_FEEDBACK
     Serial.print(x);
     Serial.print('\t');
     Serial.print(y);

@@ -1,3 +1,8 @@
+
+// supported build flags
+// -D IMU_WITH_SERIAL_FEEDBACK -> IMU lib will write some output to Serial
+//
+
 #ifndef _IMU_H_
 #define _IMU_H_
 
