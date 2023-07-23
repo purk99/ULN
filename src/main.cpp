@@ -1,23 +1,35 @@
-//PID library
-#include <PID_v1.h>
-//IMU library
-#include <IMU.h>
-
-//These are needed for MPU
 #include "I2Cdev.h"
-//#include "MPU6050_6Axis_MotionApps20.h"
-// Arduino Wire library is required if I2Cdev I2CDEV_ARDUINO_WIRE implementation
-// is used in I2Cdev.h
-/*
-#if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
-    #include "Wire.h"
-#endif
-*/
+//#include<Wire.h>
+#include <PID_v1.h>
+#include "MPU6050_6Axis_MotionApps20.h"
+//#include<SoftwareSerial.h>
+//#include <digitalIOPerformance.h>                //library for faster pin R/W
+//#include <Ultrasonic.h>
 
-// class default I2C address is 0x68
-//MPU6050 mpu;
- 
-#define INTERRUPT_PIN 2  // use pin 2 on Arduino Uno & most boards
+#define d_speed 1.5
+#define d_dir 3     
+
+
+#define IN1 11
+#define IN2 10
+#define IN3 9
+#define IN4 3
+
+char content = 'P';
+int MotorAspeed, MotorBspeed;
+float MOTORSLACK_A = 40;                   // Compensate for motor slack range (low PWM values which result in no motor engagement)
+float MOTORSLACK_B = 40;
+#define BALANCE_PID_MIN -255              // Define PID limits to match PWM max in reverse and foward
+#define BALANCE_PID_MAX 255
+
+MPU6050 mpu;
+
+const int rxpin = 6;       //Bluetooth serial stuff
+const int txpin = 5;
+SoftwareSerial blue(rxpin, txpin);
+
+//Ultrasonic ultrasonic(A0, A1);
+//int distance;
 
 // MPU control/status vars
 bool dmpReady = false;  // set true if DMP init was successful
@@ -28,215 +40,269 @@ uint16_t fifoCount;     // count of all bytes currently in FIFO
 uint8_t fifoBuffer[64]; // FIFO storage buffer
 
 // orientation/motion vars
-//DEPRECATED, INTERNAL IMU OF THE NANO 33 BLE IS USED
-/*
 Quaternion q;           // [w, x, y, z]         quaternion container
 VectorFloat gravity;    // [x, y, z]            gravity vector
 float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
-VectorInt16 gy;         // [x, y, z]            gyro sensor measurements
 
 
-// ================================================================
-// ===               INTERRUPT DETECTION ROUTINE                ===
-// ================================================================
+
+/*********Tune these 4 values for your BOT*********/
+double setpoint; //set the value when the bot is perpendicular to ground using serial monitor.
+double originalSetpoint;
+//Read the project documentation on circuitdigest.com to learn how to set these values
+#define Kp  10 //Set this first
+#define Kd  0.6 //Set this secound
+#define Ki  160 //Finally set this
+
+#define RKp  50 //Set this first
+#define RKd 4//Set this secound
+#define RKi  300 //Finally set this
+/******End of values setting*********/
+double ysetpoint;
+double yoriginalSetpoint;
+double input, yinput, youtput, output, Buffer[3];
+
+PID pid(&input, &output, &setpoint, Kp, Ki, Kd, DIRECT);
+PID rot(&yinput, &youtput, &ysetpoint, RKp, RKi, RKd, DIRECT);
 
 volatile bool mpuInterrupt = false;     // indicates whether MPU interrupt pin has gone high
-void dmpDataReady() {
-    mpuInterrupt = true;
-}
-*/
-
-#define PID_MIN_LIMIT -255  //Min limit for PID 
-#define PID_MAX_LIMIT 255  //Max limit for PID 
-#define PID_SAMPLE_TIME_IN_MILLI 10  //This is PID sample time in milliseconds
-
-//The pitch angle given by MPU6050 when robot is vertical and MPU6050 is horizontal is 0 in ideal case.
-//However in real case its slightly off and we need add some correction to keep robot vertical.
-//This is the angle correction to keep our robot stand vertically. Sometimes robot moves in one direction so we need to adjust this.
-#define SETPOINT_PITCH_ANGLE_OFFSET -2.2   
-
-#define MIN_ABSOLUTE_SPEED 0  //Min motor speed 
-
-double setpointPitchAngle = SETPOINT_PITCH_ANGLE_OFFSET;
-double pitchGyroAngle = 0;
-double pitchPIDOutput = 0;
-
-double setpointYawRate = 0;
-double yawGyroRate = 0;
-double yawPIDOutput = 0;
-
-#define PID_PITCH_KP 10
-#define PID_PITCH_KI 80 
-#define PID_PITCH_KD .8
-
-#define PID_YAW_KP 0.5
-#define PID_YAW_KI 0.5
-#define PID_YAW_KD 0
-
-PID pitchPID(&pitchGyroAngle, &pitchPIDOutput, &setpointPitchAngle, PID_PITCH_KP, PID_PITCH_KI, PID_PITCH_KD, DIRECT);
-PID yawPID(&yawGyroRate, &yawPIDOutput, &setpointYawRate, PID_YAW_KP, PID_YAW_KI, PID_YAW_KD, DIRECT);
-
-//int enableMotor1=9;
-int motor1Pin1=11;
-int motor1Pin2=10;
-
-int motor2Pin1=9;
-int motor2Pin2=8;
-//int enableMotor2=10;
-
-void rotateMotor(int speed1, int speed2);
-
-void setupMotors()
+void dmpDataReady()
 {
-  //pinMode(enableMotor1,OUTPUT);
-  pinMode(motor1Pin1,OUTPUT);
-  pinMode(motor1Pin2,OUTPUT);
-  
-  //pinMode(enableMotor2,OUTPUT);
-  pinMode(motor2Pin1,OUTPUT);
-  pinMode(motor2Pin2,OUTPUT);
-
-  rotateMotor(0,0);
+  mpuInterrupt = true;
 }
 
-void setupPID()
-{
-  pitchPID.SetOutputLimits(PID_MIN_LIMIT, PID_MAX_LIMIT);
-  pitchPID.SetMode(AUTOMATIC);
-  pitchPID.SetSampleTime(PID_SAMPLE_TIME_IN_MILLI);
 
-  yawPID.SetOutputLimits(PID_MIN_LIMIT, PID_MAX_LIMIT);
-  yawPID.SetMode(AUTOMATIC);
-  yawPID.SetSampleTime(PID_SAMPLE_TIME_IN_MILLI);
-    
+void setup() {
+  Serial.begin(115200);
+  blue.begin(9600);
+  blue.setTimeout(10);
+  init_imu();           //initialiser le MPU6050
+  initmot();            //initialiser les moteurs
+  originalSetpoint = 176;  //consigne
+  yoriginalSetpoint = 0.1;
+  setpoint = originalSetpoint ;
+  ysetpoint = yoriginalSetpoint ;
 }
-/*
-void setupMPU()
-{
 
-  // join I2C bus (I2Cdev library doesn't do this automatically)
-  #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
-      Wire.begin();
-      Wire.setClock(400000); // 400kHz I2C clock. Comment this line if having compilation difficulties
-  #elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
-      Fastwire::setup(400, true);
-  #endif
-  
+
+
+void loop() {
+    getvalues();
+    Bt_control();
+    printval();
+}
+
+
+
+
+
+
+
+void init_imu() {
+  // initialize device
+  Serial.println(F("Initializing I2C devices..."));
+  Wire.begin();
+  TWBR = 24;
   mpu.initialize();
-  pinMode(INTERRUPT_PIN, INPUT);
+
+  // verify connection
+  Serial.println(F("Testing device connections..."));
+  Serial.println(mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
+
+  // load and configure the DMP
   devStatus = mpu.dmpInitialize();
 
+
   // supply your own gyro offsets here, scaled for min sensitivity
-//           X Accel  Y Accel  Z Accel   X Gyro   Y Gyro   Z Gyro
-//OFFSETS    -1798,     263,    1124,    -261,      26,      32
-  mpu.setXAccelOffset(-1798); 
-  mpu.setYAccelOffset(263); 
-  mpu.setZAccelOffset(1124);   
-  mpu.setXGyroOffset(-261);
-  mpu.setYGyroOffset(26);
-  mpu.setZGyroOffset(32);  
+  mpu.setXGyroOffset(220);
+  mpu.setYGyroOffset(76);
+  mpu.setZGyroOffset(-85);
+  mpu.setZAccelOffset(1688);
+
   // make sure it worked (returns 0 if so)
-  if (devStatus == 0) 
+  if (devStatus == 0) {
+    // turn on the DMP, now that it's ready
+    Serial.println(F("Enabling DMP..."));
+    mpu.setDMPEnabled(true);
+
+    // enable Arduino interrupt detection
+    Serial.println(F("Enabling interrupt detection (Arduino external interrupt 0)..."));
+    attachInterrupt(0, dmpDataReady, RISING);
+    mpuIntStatus = mpu.getIntStatus();
+
+    // set our DMP Ready flag so the main loop() function knows it's okay to use it
+    Serial.println(F("DMP ready! Waiting for first interrupt..."));
+    dmpReady = true;
+
+    // get expected DMP packet size for later comparison
+    packetSize = mpu.dmpGetFIFOPacketSize();
+
+    //setup PID
+    pid.SetMode(AUTOMATIC);
+    pid.SetSampleTime(10);
+    pid.SetOutputLimits(-255, 255);
+    rot.SetMode(AUTOMATIC);
+    rot.SetSampleTime(10);
+    rot.SetOutputLimits(-20, 20);
+  }
+  else
   {
-      // Calibration Time: generate offsets and calibrate our MPU6050
-      //mpu.CalibrateAccel(6);
-      //mpu.CalibrateGyro(6);
-      // turn on the DMP, now that it's ready
-      mpu.setDMPEnabled(true);
-      mpuIntStatus = mpu.getIntStatus();
-      dmpReady = true;
-      // get expected DMP packet size for later comparison
-      packetSize = mpu.dmpGetFIFOPacketSize();
-  } 
-  else 
-  {
-      // ERROR!
+    // ERROR!
+    // 1 = initial memory load failed
+    // 2 = DMP configuration updates failed
+    // (if it's going to break, usually the code will be 1)
+    Serial.print(F("DMP Initialization failed (code "));
+    Serial.print(devStatus);
+    Serial.println(F(")"));
   }
 }
-*/
 
-void setup()
-{
-  Serial.begin(9600);
 
-  //This is to set up motors
-  setupMotors();   
-  //This is to set up MPU6050 sensor
-  //setupMPU();
-  //This is to set up PID 
-  setupPID();
-
-  if (!imuSetup()) {
-    Serial.println("Failed to initialize IMU!");
-
-    while (1);
-  }
-}
-
-void loop()
-{
+void getvalues() {
   // if programming failed, don't try to do anything
-  //if (!dmpReady) return;
 
-  imuLoop();
+  if (!dmpReady) return;
 
-    /*
-    mpu.dmpGetQuaternion(&q, fifoBuffer);
-    mpu.dmpGetGravity(&gravity, &q);
-    mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
-    mpu.dmpGetGyro(&gy, fifoBuffer);
-    */
+  // wait for MPU interrupt or extra packet(s) available
+  while (!mpuInterrupt && fifoCount < packetSize) {
+    new_pid();
+  }
+  // reset interrupt flag and get INT_STATUS byte
+  mpuInterrupt = false;
+  mpuIntStatus = mpu.getIntStatus();
 
-  yawGyroRate = gz;                   //rotation rate in degrees per second
-  //pitchGyroAngle = ypr[1] * 180/M_PI;   //angle in degree
+  // get current FIFO count
+  fifoCount = mpu.getFIFOCount();
 
-  pitchPID.Compute(true);
-  yawPID.Compute(true);
+  // check for overflow (this should never happen unless our code is too inefficient)
+  if ((mpuIntStatus & 0x10) || fifoCount == 1024)
+  {
+    // reset so we can continue cleanly
+    mpu.resetFIFO();
+    Serial.println(F("FIFO overflow!"));
 
-  rotateMotor(pitchPIDOutput+yawPIDOutput, pitchPIDOutput-yawPIDOutput);
+    // otherwise, check for DMP data ready interrupt (this should happen frequently)
+  }
+  else if (mpuIntStatus & 0x02)
+  {
+    // wait for correct available data length, should be a VERY short wait
+    while (fifoCount < packetSize) fifoCount = mpu.getFIFOCount();
 
-  #ifdef DEBUG
-    Serial.println("The gyro before ");
-    Serial.println(pitchGyroAngle);
-    Serial.println("The setpoints ");
-    Serial.println(setpointPitchAngle);
-    Serial.println("The pid output ");
-    Serial.println(pitchPIDOutput);
-    delay(500);    
-  #endif
+    // read a packet from FIFO
+    mpu.getFIFOBytes(fifoBuffer, packetSize);
+
+    // track FIFO count here in case there is > 1 packet available
+    // (this lets us immediately read more without waiting for an interrupt)
+    fifoCount -= packetSize;
+
+    mpu.dmpGetQuaternion(&q, fifoBuffer); //get value for q
+    mpu.dmpGetGravity(&gravity, &q); //get value for gravity
+    mpu.dmpGetYawPitchRoll(ypr, &q, &gravity); //get value for ypr
+
+    input = ypr[1] * 180 / M_PI + 180;
+    yinput = ypr[0] * 180 / M_PI;
+  }
 }
 
-void rotateMotor(int speed1, int speed2)
+
+void new_pid() {
+  //Compute error
+  pid.Compute();
+  rot.Compute();
+  // Convert PID output to motor control
+  MotorAspeed = compensate_slack(youtput, output, 1);
+  MotorBspeed = compensate_slack(youtput, output, 0);
+  motorspeed(MotorAspeed, MotorBspeed);            //change speed
+}
+//Fast digitalWrite is implemented
+
+
+void Bt_control() {
+  if (blue.available()) {
+    content = blue.read();
+    if (content == 'F')
+      setpoint = originalSetpoint - d_speed;//Serial.println(setpoint);}            //forward
+    else if (content == 'B')
+      setpoint = originalSetpoint + d_speed;//Serial.println(setpoint);}            //backward
+    else if (content == 'L')
+      ysetpoint = constrain((ysetpoint + yoriginalSetpoint - d_dir), -180, 180); //Serial.println(ysetpoint);}      //left
+    else if (content == 'R')
+      ysetpoint = constrain(ysetpoint + yoriginalSetpoint + d_dir, -180, 180); //Serial.println(ysetpoint);}        //right
+    else if (content == 'S') {
+      setpoint = originalSetpoint;
+    }
+  }
+  else content = 'P';
+}
+
+void initmot() {
+  //Initialise the Motor outpu pins
+  pinMode (IN4, OUTPUT);
+  pinMode (IN3, OUTPUT);
+  pinMode (IN2, OUTPUT);
+  pinMode (IN1, OUTPUT);
+
+  //By default turn off both the motor
+  analogWrite(IN4, LOW);
+  analogWrite(IN3, LOW);
+  analogWrite(IN2, LOW);
+  analogWrite(IN1, LOW);
+}
+
+double compensate_slack(double yOutput, double Output, bool A) {
+  // Compensate for DC motor non-linear "dead" zone around 0 where small values don't result in movement
+  //yOutput is for left,right control
+  if (A)
+  {
+    if (Output >= 0)
+      Output = Output + MOTORSLACK_A - yOutput;
+    if (Output < 0)
+      Output = Output - MOTORSLACK_A - yOutput;
+  }
+  else
+  {
+    if (Output >= 0)
+      Output = Output + MOTORSLACK_B + yOutput;
+    if (Output < 0)
+      Output = Output - MOTORSLACK_B + yOutput;
+  }
+  Output = constrain(Output, BALANCE_PID_MIN, BALANCE_PID_MAX);
+  return Output;
+}
+
+
+void motorspeed(int MotorAspeed, int MotorBspeed) {
+
+  // Motor A control
+  if (MotorAspeed >= 0) {
+    analogWrite(IN1, abs(MotorAspeed));
+    digitalWrite(IN2, LOW);
+  }
+  else {
+    digitalWrite(IN1, LOW);
+    analogWrite(IN2, abs(MotorAspeed));
+  }
+
+  // Motor B control
+  if (MotorBspeed >= 0) {
+    analogWrite(IN3, abs(MotorBspeed));
+    digitalWrite(IN4, LOW);
+  }
+  else {
+    digitalWrite(IN3, LOW);
+    analogWrite(IN4, abs(MotorBspeed));
+  }
+}
+void printval()
 {
-  if (speed1 < 0)
-  {
-    digitalWrite(motor1Pin1,LOW);
-    digitalWrite(motor1Pin2,HIGH);    
-  }
-  else if (speed1 >= 0)
-  {
-    digitalWrite(motor1Pin1,HIGH);
-    digitalWrite(motor1Pin2,LOW);      
-  }
-
-  if (speed2 < 0)
-  {
-    digitalWrite(motor2Pin1,LOW);
-    digitalWrite(motor2Pin2,HIGH);    
-  }
-  else if (speed2 >= 0)
-  {
-    digitalWrite(motor2Pin1,HIGH);
-    digitalWrite(motor2Pin2,LOW);      
-  }
-
- 
-  speed1 = abs(speed1) + MIN_ABSOLUTE_SPEED;
-  speed2 = abs(speed2) + MIN_ABSOLUTE_SPEED;
-
-  speed1 = constrain(speed1, MIN_ABSOLUTE_SPEED, 255);
-  speed2 = constrain(speed2, MIN_ABSOLUTE_SPEED, 255);
-    
-  //analogWrite(enableMotor1,speed1);
-  //analogWrite(enableMotor2,speed2);    
+  Serial.print(yinput); Serial.print("\t");
+  Serial.print(yoriginalSetpoint); Serial.print("\t");
+  Serial.print(ysetpoint); Serial.print("\t");
+  Serial.print(youtput); Serial.print("\t"); Serial.print("\t");
+  Serial.print(input); Serial.print("\t");
+  Serial.print(originalSetpoint); Serial.print("\t");
+  Serial.print(setpoint); Serial.print("\t");
+  Serial.print(output); Serial.print("\t"); Serial.print("\t");
+  Serial.print(MotorAspeed); Serial.print("\t");
+  Serial.print(MotorBspeed); Serial.print("\t"); Serial.print(content); Serial.println("\t");
 }
